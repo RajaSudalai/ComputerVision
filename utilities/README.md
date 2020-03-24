@@ -28,7 +28,6 @@ optional arguments:
   -h, --help            show this help message and exit
   
   --labelme_images LABELME_IMAGES
-  
                         Path to a folder containing labelme-images and
                         labelme-annotation-json-files.
                         
