@@ -1,0 +1,24 @@
+#
+name: Mask_RCNN
+#prefix: /your/custom/path/envs/Mask_RCNN
+channels:
+  - defaults
+dependencies:
+  - python==3.7
+  - numpy
+  - scikit-learn
+  - Pillow
+  - cython 
+  - cudatoolkit
+  - cudnn
+  - matplotlib
+  - scikit-image
+  - tensorflow-gpu=1
+  - keras=2
+  - opencv
+  - h5py
+  - imgaug
+  - spyder
+  - jupyter
+# To install pycocotools :
+# pip install git+https://github.com/philferriere/cocoapi.git#subdirectory=PythonAPI
