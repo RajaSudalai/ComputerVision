@@ -10,5 +10,5 @@ python helmet-json.py train --dataset="../../datasets/helmet" --weights==coco
 * Change current folder to this Helmet folder in spyder
 * Open helmet-json.py program in spyder 
 * Select 'Run' from spyder menu and select 'Configuration per file'
-* Enter   'splash --weights=last --image="path/to/image-input-file.jpg" '        in "Command line options:"
+* Enter   'splash --weights=last --image="path/to/image-input-file.jpg" ' in Command line options: window
 * Run the program in spyder
