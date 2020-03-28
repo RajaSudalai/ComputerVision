@@ -2,6 +2,7 @@
 
 ### To Train : 
 "current folder should be this helmet folder and conda environemnt should be currectly set"
+
 python helmet-json.py train --dataset="../../datasets/helmet" --weights==coco
 
 ### To run in inference mode to detect instance segmentation. 
