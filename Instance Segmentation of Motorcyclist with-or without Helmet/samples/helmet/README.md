@@ -1,7 +1,7 @@
 # Instance Segmentation model to detect Motorcyclist with-or-without Helmet
 
 ### To Train : 
-"current folder should be this helmet folder and conda environemnt should be currectly set"
+##### current folder should be this helmet folder and conda environemnt should be currectly set
 
 python helmet-json.py train --dataset="../../datasets/helmet" --weights==coco
 
