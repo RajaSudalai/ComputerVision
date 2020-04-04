@@ -1,5 +1,7 @@
 # Data files and directories common in repo root
-datasets/
+datasets/*
+!datasets/train/
+!datasets/val
 logs/
 *.h5
 results/
