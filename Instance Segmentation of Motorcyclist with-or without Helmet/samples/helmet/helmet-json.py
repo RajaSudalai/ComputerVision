@@ -52,6 +52,10 @@ COCO_WEIGHTS_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
 # through the command line argument --logs
 DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 
+# Keep the label as 'Motorcyclist' and 'Helmet'
+# Set to False if needs to be 'Motorcyclist_with_Helmet' or 'without_Helmet' instead
+DEFAULT_LABEL_HELMET_SEPARATE = True 
+
 ############################################################
 #  Configurations
 ############################################################
@@ -69,13 +73,14 @@ class HelmetConfig(Config):
     IMAGES_PER_GPU = 2
 
     # Number of classes (including background)
-    NUM_CLASSES = 1 + 2  # Background + helmet
+    NUM_CLASSES = 1+2 if DEFAULT_LABEL_HELMET_SEPARATE else 1+3  
 
     # Number of training steps per epoch
     STEPS_PER_EPOCH = 100
 
     # Skip detections with < 90% confidence
     DETECTION_MIN_CONFIDENCE = 0.9
+    
 
 
 ############################################################
@@ -116,8 +121,50 @@ class HelmetDataset(utils.Dataset):
         # Add classes. We have only one class to add.
         #self.add_class("helmet", 1, "helmet")
 
-        class_names ={}
+        # For collecting statistics 
+        number_of_images = 0
+        instance_count = {}
+        
+        class_names = {}
+        
+        def isSegmentConnector(r) :
+            """
 
+            Parameters
+            ----------
+            r : region type with format :
+                {
+                	"shape_attributes": {
+                		"name": "polygon",
+                		"all_points_x": [
+                			229,231,
+                		],
+                		"all_points_y": [
+                			272,268,
+                		]
+                	},
+                	"region_attributes": {
+                		"name": "Motorcyclist",
+                		"segment_connector": " "
+                	}
+                    "ignore" : False
+                    "with_helmet" : False
+                }
+                
+                DESCRIPTION : checks if the given region is Connected Segment or not.
+
+            Returns
+            -------
+            True if it the given region is a valid connected segment
+            False if it is a stand-alone segment
+
+            """
+            if ('segment_connector' in r['region_attributes']  and
+            r['region_attributes']['segment_connector'].strip()) :
+                return True
+            else:
+                return False
+        
         # The VIA tool saves images in the JSON even if they don't have any
         # annotations. Skip unannotated images.
         annotations = [a for a in annotations if a['regions']]
@@ -133,16 +180,58 @@ class HelmetDataset(utils.Dataset):
             else :
                 regions = a['regions']
             
+            # Connect the regions which belong to the same instance
+            reg_len = len(regions)
+            for i in range(reg_len):
+                regions[i]['ignore'] = False
+                regions[i]['with_helmet'] = False
+                regions[i]['shape_attributes'] = [regions[i]['shape_attributes']]
+                
+            for i, r in enumerate(regions):
+                
+                assert r['region_attributes']['name']
+                
+                if not isSegmentConnector(r):
+                    continue
+                # Check if there are linked instances and combine the regions accordingly
+                # Check if the Helmet instance belongs to a motorcyclist to mark 'with_helmet' flag
+                for j, rg in enumerate(regions[i+1:]):
+                    if not isSegmentConnector(rg):
+                        continue
+                    if (r['region_attributes']['segment_connector'].strip() ==
+                    rg['region_attributes']['segment_connector'].strip()) :
+                            
+                        if (r['region_attributes']['name'] == 'Motorcyclist' and 
+                            rg['region_attributes']['name'] == 'Helmet') : 
+                            regions[i]['with_helmet'] = True
+                        elif (r['region_attributes']['name'] == 
+                              rg['region_attributes']['name']) :
+                            regions[i]['shape_attributes'].extend(rg['shape_attributes']) 
+                            regions[j]['ignore'] = True                          
+                
             polygons = []
             for r in regions :
                 
-                assert r['region_attributes']['name']
+                if r['ignore']:
+                    continue 
+                
                 class_name = r['region_attributes']['name']
+                
+                if not DEFAULT_LABEL_HELMET_SEPARATE :
+                    if r['with_helmet'] and class_name == 'Motorcyclist':
+                        class_name = class_name + "with_helmet"
+                    elif class_name == 'Motorcyclist':
+                        class_name = class_name + "without_helmet"
+                    
                 if class_name not in class_names.keys() :
                     if len(class_names.keys()) > 0 :
                         class_names[class_name] = max(class_names.values()) + 1
                     else :
                         class_names[class_name] = 1
+                        
+                    instance_count[class_name] = 0
+                    
+                instance_count[class_name] += 1
                 
                 polygon = {
                     "polygon": r['shape_attributes'],
@@ -170,11 +259,16 @@ class HelmetDataset(utils.Dataset):
                 path=image_path,
                 width=width, height=height,
                 polygons=polygons)
+            number_of_images += 1
+            
         for class_name in list(class_names.keys()):
             self.add_class("helmet", class_names[class_name], class_name)
         
-        print ('Class names assessed in load_helmet : ', class_names)
-
+        # Statistics on datasets
+        print ('\n{:*^50}'.format('Dataset statistics for ' + subset))
+        print ('{:<20} {}'.format('Number of Images', number_of_images))
+        print ('{:<20} {}'.format('class info', class_names))
+        print ('{:<20} {}\n'.format('Nbr of Instances', instance_count))
 
     def load_mask(self, image_id):
         """Generate instance masks for an image.
@@ -198,8 +292,9 @@ class HelmetDataset(utils.Dataset):
         class_ids = []
         for i, p in enumerate(info["polygons"]):
             # Get indexes of pixels inside the polygon and set them to 1
-            rr, cc = skimage.draw.polygon(p['polygon']['all_points_y'], p['polygon']['all_points_x'])
-            mask[rr, cc, i] = 1
+            for each in p['polygon'] :
+                rr, cc = skimage.draw.polygon(each['all_points_y'], each['all_points_x'])
+                mask[rr, cc, i] = 1
             class_ids.append(p['catId'])
 
         # Return mask, and array of class IDs of each instance. Since we have
@@ -277,7 +372,7 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         
         _, ax = plt.subplots(1, 1, figsize=(20, 20))
         visualize.display_instances(image, r['rois'], r['masks'], r['class_ids'], 
-                            ['BG', 'Motorcyclist', 'Helmet'], r['scores'], ax=ax)
+                            ['BG', 'Motorcyclist_without_Helmet', 'Helmet', 'Motorcyclist_with_Helmet'], r['scores'], ax=ax)
         ####
         # Save output
         file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
@@ -348,6 +443,10 @@ if __name__ == '__main__':
     parser.add_argument('--video', required=False,
                         metavar="path or URL to video",
                         help='Video to apply the color splash effect on')
+    # parser.add_argument('--label', required=False,
+    #                     default=DEFAULT_LABEL_HELMET_SEPARATE,
+    #                     metavar="combine or separate",
+    #                     help="combine - Combine 'Motorcyclist_with_Helmet' separate - 'Motorcyclist' and 'Helmet' are separate labels")
     args = parser.parse_args()
 
     # Validate arguments
