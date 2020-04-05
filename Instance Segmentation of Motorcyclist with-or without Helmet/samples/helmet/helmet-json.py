@@ -54,12 +54,13 @@ DEFAULT_LOGS_DIR = os.path.join(ROOT_DIR, "logs")
 
 # Keep the label as 'Motorcyclist' and 'Helmet'
 # Set to False if needs to be 'Motorcyclist_with_Helmet' or 'without_Helmet' instead
-DEFAULT_LABEL_HELMET_SEPARATE = True 
+DEFAULT_LABEL_HELMET_SEPARATE = False 
+DEBUG = False
+NBR_OF_EPOCHS = 30
 
 ############################################################
 #  Configurations
 ############################################################
-
 
 class HelmetConfig(Config):
     """Configuration for training on the toy  dataset.
@@ -80,8 +81,6 @@ class HelmetConfig(Config):
 
     # Skip detections with < 90% confidence
     DETECTION_MIN_CONFIDENCE = 0.9
-    
-
 
 ############################################################
 #  Dataset
@@ -169,6 +168,11 @@ class HelmetDataset(utils.Dataset):
         # annotations. Skip unannotated images.
         annotations = [a for a in annotations if a['regions']]
 
+        
+        nbr_of_ignored = 0
+        if DEBUG :
+            temp_r = [] # for debugging purpose
+        
         # Add images
         for a in annotations:
             # Get the x, y coordinaets of points of the polygons that make up
@@ -185,43 +189,72 @@ class HelmetDataset(utils.Dataset):
             for i in range(reg_len):
                 regions[i]['ignore'] = False
                 regions[i]['with_helmet'] = False
+                regions[i]['helmet_annotation'] = "NA"
                 regions[i]['shape_attributes'] = [regions[i]['shape_attributes']]
-                
+            
+            # Merge connected regions by checking SegmentConnector region attribute
+            # Identify Motorcyclist if it has connected Helment annotation to flag accordingly
             for i, r in enumerate(regions):
                 
-                assert r['region_attributes']['name']
+                assert r['region_attributes']['name'] in ["Motorcyclist", "Helmet"]
                 
                 if not isSegmentConnector(r):
+                    # check for 'Helmet' annotation found with no SegmentConnector.
+                    # this should be corrected in annotation.
+                    if r['region_attributes']['name'] == 'Helmet' :
+                        print('Helmet annotation found without SegmentConnector : ',
+                              'filename : {} annotation# : {}'.format(a['filename'], i+1))
                     continue
                 # Check if there are linked instances and combine the regions accordingly
                 # Check if the Helmet instance belongs to a motorcyclist to mark 'with_helmet' flag
-                for j, rg in enumerate(regions[i+1:]):
-                    if not isSegmentConnector(rg):
+                for j, rg in zip(range(i+1,reg_len), regions[i+1:]):
+                    
+                    if (not isSegmentConnector(rg) or 
+                        rg['ignore'] or 
+                        (rg['with_helmet'] and rg['region_attributes']['name'] == 'Helmet') or
+                        (regions[i]['with_helmet'] and r['region_attributes']['name'] == 'Helmet')):
                         continue
-                    if (r['region_attributes']['segment_connector'].strip() ==
-                    rg['region_attributes']['segment_connector'].strip()) :
+                    
+                    if (r['region_attributes']['segment_connector'].strip() == 
+                        rg['region_attributes']['segment_connector'].strip()) :
+                        
+                        if (r['region_attributes']['name'] == 
+                            rg['region_attributes']['name']) :
+                            regions[i]['shape_attributes'].extend(rg['shape_attributes']) 
+                            regions[j]['ignore'] = True
                             
-                        if (r['region_attributes']['name'] == 'Motorcyclist' and 
+                        elif (r['region_attributes']['name'] == 'Motorcyclist' and 
                             rg['region_attributes']['name'] == 'Helmet') : 
                             regions[i]['with_helmet'] = True
-                        elif (r['region_attributes']['name'] == 
-                              rg['region_attributes']['name']) :
-                            regions[i]['shape_attributes'].extend(rg['shape_attributes']) 
-                            regions[j]['ignore'] = True                          
+                            regions[j]['with_helmet'] = True
+                            regions[i]['helmet_annotation'] = str(j)
+                            
+                        elif (r['region_attributes']['name'] == 'Helmet' and 
+                            rg['region_attributes']['name'] == 'Motorcyclist') : 
+                            regions[i]['with_helmet'] = True
+                            regions[j]['with_helmet'] = True
+                            regions[j]['helmet_annotation'] = str(i)
                 
             polygons = []
-            for r in regions :
+            
+            for i, r in enumerate(regions) :
                 
                 if r['ignore']:
+                    nbr_of_ignored += 1
                     continue 
                 
                 class_name = r['region_attributes']['name']
                 
+                # Modify class_name to mark with_helmet for combined helmet detection 
                 if not DEFAULT_LABEL_HELMET_SEPARATE :
                     if r['with_helmet'] and class_name == 'Motorcyclist':
-                        class_name = class_name + "with_helmet"
+                        class_name = class_name + "_with_helmet"
                     elif class_name == 'Motorcyclist':
-                        class_name = class_name + "without_helmet"
+                        class_name = class_name + "_without_helmet"
+                    
+                    if class_name == 'Helmet' and not r['with_helmet'] :
+                        print('Helmet annotation found without matching SegmentConnector : ', 
+                              'filename : {} annotation# : {}'.format(a['filename'], i+1))
                     
                 if class_name not in class_names.keys() :
                     if len(class_names.keys()) > 0 :
@@ -238,6 +271,16 @@ class HelmetDataset(utils.Dataset):
                     "catId" : class_names[class_name]
                     }
                 polygons.append(polygon)
+                
+                # For debugging purpose
+                if DEBUG :
+                    temp_r.append( {
+                        "file_name" : a['filename'],
+                        "name" : class_name,
+                        'annotation_nbr' : str(i),
+                        "with_helmet" : r['with_helmet'],
+                        "helmet_annotation_nbr" : r['helmet_annotation']
+                        })
 
                 
             #     polygons = [r['shape_attributes'] for r in a['regions'].values()]
@@ -268,7 +311,13 @@ class HelmetDataset(utils.Dataset):
         print ('\n{:*^50}'.format('Dataset statistics for ' + subset))
         print ('{:<20} {}'.format('Number of Images', number_of_images))
         print ('{:<20} {}'.format('class info', class_names))
-        print ('{:<20} {}\n'.format('Nbr of Instances', instance_count))
+        print ('{:<20} {}'.format('Nbr of Instances', instance_count))
+        print ('{:<20} {}\n'.format('Nbr of ignored Instances', nbr_of_ignored))
+        
+        if DEBUG :
+            import pandas as pd
+            df = pd.DataFrame(data=temp_r)
+            df.to_excel("DEBUG_temp.xlsx", index=False)
 
     def load_mask(self, image_id):
         """Generate instance masks for an image.
@@ -329,7 +378,7 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=30,
+                epochs=NBR_OF_EPOCHS,
                 layers='heads')
 
 
@@ -356,6 +405,12 @@ def color_splash(image, mask):
 def detect_and_color_splash(model, image_path=None, video_path=None):
     assert image_path or video_path
 
+    if DEFAULT_LABEL_HELMET_SEPARATE :
+        class_names = ['BG', 'Motorcyclist', 'Helmet']
+    else :
+        class_names = ['BG', 'Motorcyclist_without_Helmet', 
+                       'Helmet', 'Motorcyclist_with_Helmet']
+        
     # Image or video?
     if image_path:
         # Run model detection and generate the color splash effect
@@ -372,7 +427,8 @@ def detect_and_color_splash(model, image_path=None, video_path=None):
         
         _, ax = plt.subplots(1, 1, figsize=(20, 20))
         visualize.display_instances(image, r['rois'], r['masks'], r['class_ids'], 
-                            ['BG', 'Motorcyclist_without_Helmet', 'Helmet', 'Motorcyclist_with_Helmet'], r['scores'], ax=ax)
+                            class_names, 
+                            r['scores'], ax=ax)
         ####
         # Save output
         file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
